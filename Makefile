@@ -43,6 +43,12 @@ build-darwin:
 	@mkdir -p $(BUILD_DIR)
 	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LD_FLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./cmd/traefik/
 
+## build-darwin-arm: Cross-compile for macOS Apple Silicon
+build-darwin-arm:
+	@echo "Building $(BINARY_NAME) for macOS (arm64)..."
+	@mkdir -p $(BUILD_DIR)
+	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LD_FLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./cmd/traefik/
+
 ## test: Run unit tests
 test:
 	@echo "Running tests..."
