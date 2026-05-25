@@ -104,9 +104,12 @@ generate:
 	@echo "Running go generate..."
 	$(GO) generate ./...
 
+## install: Install binary to $GOPATH/bin (handy for local dev)
+install:
+	@echo "Installing $(BINARY_NAME) to $(GOPATH)/bin..."
+	$(GOBUILD) $(LD_FLAGS) -o $(GOPATH)/bin/$(BINARY_NAME) ./cmd/traefik/
+
 ## help: Display this help message
 help:
 	@echo "Usage: make [target]"
-	@echo ""
-	@echo "Targets:"
-	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /' | column -t -s ':'
+	@
