@@ -1,201 +1,106 @@
-SRCS = $(shell git ls-files '*.go' | grep -v '^vendor/')
+# Traefik Makefile
 
-TAG_NAME := $(shell git describe --abbrev=0 --tags --exact-match)
-SHA := $(shell git rev-parse HEAD)
-VERSION_GIT := $(if $(TAG_NAME),$(TAG_NAME),$(SHA))
-VERSION := $(if $(VERSION),$(VERSION),$(VERSION_GIT))
+# Variables
+BINARY_NAME := traefik
+BUILD_DIR := dist
+GO := go
+GOFLAGS := -v
+GOTEST := $(GO) test
+GOBUILD := $(GO) build
+GOVET := $(GO) vet
+GOFMT := gofmt
 
-BIN_NAME := traefik
-CODENAME ?= cheddar
+# Version information
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+DATE := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-DATE := $(shell date -u '+%Y-%m-%d_%I:%M:%S%p')
+# Build flags
+LD_FLAGS := -ldflags "-X github.com/traefik/traefik/v3/pkg/version.Version=$(VERSION) \
+	-X github.com/traefik/traefik/v3/pkg/version.Commit=$(COMMIT) \
+	-X github.com/traefik/traefik/v3/pkg/version.Date=$(DATE)"
 
-# Default build target
-GOOS := $(shell go env GOOS)
-GOARCH := $(shell go env GOARCH)
-GOGC ?=
+.PHONY: all build clean test lint fmt vet help docker-build
 
-LINT_EXECUTABLES = misspell shellcheck
+## all: Build the binary
+all: clean build
 
-DOCKER_BUILD_PLATFORMS ?= linux/amd64,linux/arm64
+## build: Compile the binary
+build:
+	@echo "Building $(BINARY_NAME) $(VERSION)..."
+	@mkdir -p $(BUILD_DIR)
+	$(GOBUILD) $(GOFLAGS) $(LD_FLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/traefik/
 
-.PHONY: default
-#? default: Run `make generate` and `make binary`
-default: generate binary
+## build-linux: Cross-compile for Linux
+build-linux:
+	@echo "Building $(BINARY_NAME) for Linux..."
+	@mkdir -p $(BUILD_DIR)
+	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LD_FLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./cmd/traefik/
 
-#? dist: Create the "dist" directory
-dist:
-	mkdir -p dist
+## build-darwin: Cross-compile for macOS
+build-darwin:
+	@echo "Building $(BINARY_NAME) for macOS..."
+	@mkdir -p $(BUILD_DIR)
+	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LD_FLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./cmd/traefik/
 
-.PHONY: build-webui-image
-#? build-webui-image: Build WebUI Docker image
-build-webui-image:
-	docker build -t traefik-webui -f webui/buildx.Dockerfile webui
+## test: Run unit tests
+test:
+	@echo "Running tests..."
+	$(GOTEST) $(GOFLAGS) ./...
 
-.PHONY: clean-webui
-#? clean-webui: Clean WebUI static generated assets
-clean-webui:
-	rm -r webui/static
-	mkdir -p webui/static
-	printf 'For more information see `webui/readme.md`' > webui/static/DONT-EDIT-FILES-IN-THIS-DIRECTORY.md
+## test-race: Run tests with race detector
+test-race:
+	@echo "Running tests with race detector..."
+	$(GOTEST) -race ./...
 
-webui/static/index.html:
-	$(MAKE) build-webui-image
-	docker run --rm -v "$(PWD)/webui/static":'/src/webui/static' traefik-webui yarn build:prod
-	docker run --rm -v "$(PWD)/webui/static":'/src/webui/static' traefik-webui chown -R $(shell id -u):$(shell id -g) ./static
-	printf 'For more information see `webui/readme.md`' > webui/static/DONT-EDIT-FILES-IN-THIS-DIRECTORY.md
+## test-coverage: Run tests with coverage report
+test-coverage:
+	@echo "Running tests with coverage..."
+	$(GOTEST) -coverprofile=coverage.out ./...
+	$(GO) tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
 
-.PHONY: generate-webui
-#? generate-webui: Generate WebUI
-generate-webui: webui/static/index.html
-
-.PHONY: generate
-#? generate: Generate code (Dynamic and Static configuration documentation reference files)
-generate:
-	go generate
-
-.PHONY: binary
-#? binary: Build the binary
-binary: generate-webui dist
-	@echo SHA: $(VERSION) $(CODENAME) $(DATE)
-	CGO_ENABLED=0 GOGC=${GOGC} GOOS=${GOOS} GOARCH=${GOARCH} go build ${FLAGS} -ldflags "-s -w \
-    -X github.com/traefik/traefik/v3/pkg/version.Version=$(VERSION) \
-    -X github.com/traefik/traefik/v3/pkg/version.Codename=$(CODENAME) \
-    -X github.com/traefik/traefik/v3/pkg/version.BuildDate=$(DATE)" \
-    -installsuffix nocgo -o "./dist/${GOOS}/${GOARCH}/$(BIN_NAME)" ./cmd/traefik
-
-binary-linux-arm64: export GOOS := linux
-binary-linux-arm64: export GOARCH := arm64
-binary-linux-arm64:
-	@$(MAKE) binary
-
-binary-linux-amd64: export GOOS := linux
-binary-linux-amd64: export GOARCH := amd64
-binary-linux-amd64:
-	@$(MAKE) binary
-
-binary-windows-amd64: export GOOS := windows
-binary-windows-amd64: export GOARCH := amd64
-binary-windows-amd64: export BIN_NAME := traefik.exe
-binary-windows-amd64:
-	@$(MAKE) binary
-
-.PHONY: crossbinary-default
-#? crossbinary-default: Build the binary for the standard platforms (linux, darwin, windows)
-crossbinary-default: generate generate-webui
-	$(CURDIR)/script/crossbinary-default.sh
-
-.PHONY: test
-#? test: Run the unit and integration tests
-test: test-ui-unit test-unit test-integration
-
-.PHONY: test-unit
-#? test-unit: Run the unit tests
-test-unit:
-	GOOS=$(GOOS) GOARCH=$(GOARCH) go test -cover "-coverprofile=cover.out" -v $(TESTFLAGS) ./pkg/... ./cmd/...
-
-.PHONY: test-integration
-#? test-integration: Run the integration tests
-test-integration:
-	GOOS=$(GOOS) GOARCH=$(GOARCH) go test ./integration -test.timeout=20m -failfast -v $(TESTFLAGS)
-
-.PHONY: test-gateway-api-conformance
-#? test-gateway-api-conformance: Run the Gateway API conformance tests
-test-gateway-api-conformance: build-image-dirty
-	# In case of a new Minor/Major version, the traefikVersion needs to be updated.
-	GOOS=$(GOOS) GOARCH=$(GOARCH) go test ./integration -v -tags gatewayAPIConformance -test.run GatewayAPIConformanceSuite -traefikVersion="v3.7" $(TESTFLAGS)
-
-.PHONY: test-knative-conformance
-#? test-knative-conformance: Run the Knative conformance tests
-test-knative-conformance: build-image-dirty
-	GOOS=$(GOOS) GOARCH=$(GOARCH) go test ./integration/integration_test.go ./integration/knative_conformance_test.go -v -tags knativeConformance -test.run KnativeConformanceSuite
-
-.PHONY: test-ui-unit
-#? test-ui-unit: Run the unit tests for the webui
-test-ui-unit:
-	$(MAKE) build-webui-image
-	docker run --rm -v "$(PWD)/webui/static":'/src/webui/static' traefik-webui yarn --cwd webui install
-	docker run --rm -v "$(PWD)/webui/static":'/src/webui/static' traefik-webui yarn --cwd webui test:unit:ci
-
-.PHONY: pull-images
-#? pull-images: Pull all Docker images to avoid timeout during integration tests
-pull-images:
-	grep --no-filename -E '^\s+image:' ./integration/resources/compose/*.yml \
-		| awk '{print $$2}' \
-		| sort \
-		| uniq \
-		| xargs -P 6 -n 1 docker pull
-
-.PHONY: lint
-#? lint: Run golangci-lint
+## lint: Run linter
 lint:
-	golangci-lint run
+	@echo "Running linter..."
+	@which golangci-lint > /dev/null || (echo "golangci-lint not found, install from https://golangci-lint.run/" && exit 1)
+	golangci-lint run ./...
 
-.PHONY: validate-files
-#? validate-files: Validate code and docs
-validate-files:
-	$(foreach exec,$(LINT_EXECUTABLES),\
-            $(if $(shell which $(exec)),,$(error "No $(exec) in PATH")))
-	$(CURDIR)/script/validate-vendor.sh
-	$(CURDIR)/script/validate-misspell.sh
-	$(CURDIR)/script/validate-shell-script.sh
-
-.PHONY: validate
-#? validate: Validate code, docs, and vendor
-validate: lint validate-files
-
-# Target for building images for multiple architectures.
-.PHONY: multi-arch-image-%
-multi-arch-image-%: binary-linux-amd64 binary-linux-arm64
-	docker buildx build $(DOCKER_BUILDX_ARGS) -t traefik/traefik:$* --platform=$(DOCKER_BUILD_PLATFORMS) -f Dockerfile .
-
-
-.PHONY: build-image
-#? build-image: Clean up static directory and build a Docker Traefik image
-build-image: export DOCKER_BUILDX_ARGS := --load
-build-image: export DOCKER_BUILD_PLATFORMS := linux/$(GOARCH)
-build-image: clean-webui
-	@$(MAKE) multi-arch-image-latest
-
-.PHONY: build-image-dirty
-#? build-image-dirty: Build a Docker Traefik image without re-building the webui when it's already built
-build-image-dirty: export DOCKER_BUILDX_ARGS := --load
-build-image-dirty: export DOCKER_BUILD_PLATFORMS := linux/$(GOARCH)
-build-image-dirty:
-	@$(MAKE) multi-arch-image-latest
-
-.PHONY: docs
-#? docs: Build documentation site
-docs:
-	make -C ./docs docs
-
-.PHONY: docs-serve
-#? docs-serve: Serve the documentation site locally
-docs-serve:
-	make -C ./docs docs-serve
-
-.PHONY: docs-pull-images
-#? docs-pull-images: Pull image for doc building
-docs-pull-images:
-	make -C ./docs docs-pull-images
-
-.PHONY: generate-crd
-#? generate-crd: Generate CRD clientset and CRD manifests
-generate-crd:
-	@$(CURDIR)/script/code-gen.sh
-
-.PHONY: generate-genconf
-#? generate-genconf: Generate code from dynamic configuration github.com/traefik/genconf
-generate-genconf:
-	go run ./cmd/internal/gen/
-
-.PHONY: fmt
-#? fmt: Format the Code
+## fmt: Format Go source code
 fmt:
-	gofmt -s -l -w $(SRCS)
+	@echo "Formatting code..."
+	$(GOFMT) -w -s .
 
-.PHONY: help
-#? help: Get more info on make commands
-help: Makefile
-	@echo " Choose a command run in traefik:"
-	@sed -n 's/^#?//p' $< | column -t -s ':' |  sort | sed -e 's/^/ /'
+## vet: Run go vet
+vet:
+	@echo "Running go vet..."
+	$(GOVET) ./...
+
+## clean: Remove build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	@rm -rf $(BUILD_DIR)
+	@rm -f coverage.out coverage.html
+
+## deps: Download dependencies
+deps:
+	@echo "Downloading dependencies..."
+	$(GO) mod download
+	$(GO) mod tidy
+
+## docker-build: Build Docker image
+docker-build:
+	@echo "Building Docker image..."
+	docker build -t traefik:$(VERSION) .
+
+## generate: Run go generate
+generate:
+	@echo "Running go generate..."
+	$(GO) generate ./...
+
+## help: Display this help message
+help:
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Targets:"
+	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /' | column -t -s ':'
