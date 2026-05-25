@@ -108,4 +108,4 @@ generate:
 install:
 	@echo "Installing $(BINARY_NAME) to $(GOPATH)/bin..."
 	$(GOBUILD) $(LD_FLAGS) -o $(GOPATH)/bin/$(BINARY_NAME) ./cmd/traefik/
-	@echo "Installed $(BINARY_NAME) $(VERSION) to $(GOPATH)/bin"
+	@echo "Installed $(BINARY_NAME) successfully."
